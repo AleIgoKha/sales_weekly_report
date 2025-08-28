@@ -2,6 +2,8 @@ import os
 import requests
 from dotenv import load_dotenv
 
+from script import message_text
+
 load_dotenv()
 TG_TOKEN = os.getenv("TG_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -13,5 +15,5 @@ def send_message(text: str):
     return response.json()
 
 if __name__ == "__main__":
-    result = send_message("Hello from Python bot!")
+    result = send_message(message_text)
     print(result)
