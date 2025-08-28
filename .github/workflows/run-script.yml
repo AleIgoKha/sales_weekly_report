@@ -23,6 +23,7 @@ jobs:
 
       - name: Run report script
         env:
+          DB_LINK: ${{ secrets.DB_LINK }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python run.py
