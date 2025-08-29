@@ -87,7 +87,7 @@ def create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty):
     text = 'Недельная сводка\n\nТоп 5 товаров по принесенной выручке:\n'
     
     for cheese in top_5_cheese_by_revenue.itertuples():
-        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {cheese.revenue} руб\n"
+        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.revenue, 2)} руб\n"
         
     text += '\nТоп 5 сыров по проданному количеству:\n'
     
