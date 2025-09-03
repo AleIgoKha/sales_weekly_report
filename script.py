@@ -1,10 +1,14 @@
 import os
+import io
 import pytz
 import pandas as pd
 import numpy as np
+import seaborn as sns
+from matplotlib import pyplot as plt
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
+
 
 
 # переводим +0 UTC в +3 UTC
@@ -15,33 +19,15 @@ def get_utc_chisinau(date_time: datetime):
 
 
 # Подключаемся к базе данных и делаем запрос
-def df_loading():
+def df_loading(query, date_column):
     load_dotenv()
     engine = create_engine(os.getenv("DB_LINK"))
-
-    transactions_query = """
-    SELECT t.transaction_datetime,
-        t.transaction_type,
-        t.transaction_product_name,
-        t.transaction_product_price,
-        t.product_qty,
-        p.product_unit,
-        t.balance_after
-    FROM public.transactions AS t
-    JOIN public.stocks AS s ON s.stock_id = t.stock_id
-    JOIN public.products AS p ON p.product_id = s.product_id
-    WHERE t.outlet_id = 5
-    AND t.transaction_type = 'balance'
-    """
-
-    return pd.read_sql(sql=transactions_query,
+    return pd.read_sql(sql=query,
                        con=engine,
-                       parse_dates=['transaction_datetime'])
+                       parse_dates=[date_column])
 
 
 def df_transformation(sales_data):
-    sales_data = df_loading()
-
     # корректируем время
     sales_data['transaction_datetime'] = sales_data['transaction_datetime'].apply(get_utc_chisinau).dt.normalize()
 
@@ -72,6 +58,7 @@ def calculate_top_5_cheese_by_revenue(last_week_sales_data):
                                                     .reset_index(drop=True) \
                                                     .head()
 
+
 def calculate_top_5_cheese_by_qty(last_week_sales_data):
     # выводим топ 5 товаров измеряемых в килограммах по принесенной проданному количеству
     return last_week_sales_data[last_week_sales_data['product_unit'] == 'кг'] \
@@ -81,6 +68,92 @@ def calculate_top_5_cheese_by_qty(last_week_sales_data):
                                                     .sort_values(by=['product_qty'], ascending=False) \
                                                     .reset_index(drop=True) \
                                                     .head()
+
+
+# приводим время к дате и сортируем по нему для данных отчетов
+def reports_transformation(df):
+    df = df.sort_values(by=['report_datetime'], ascending=True)
+    df['report_datetime'] = df['report_datetime'].apply(get_utc_chisinau) \
+                                                                    .dt \
+                                                                    .normalize()
+    return df
+
+
+# возвращаем график с выручкой по дням недели
+def revenue_throughout_week(df):
+    # даем дням недели русские короткие названия
+    russian_weekdays = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'}
+    
+    df['weekday'] = df['report_datetime'].dt.dayofweek.map(russian_weekdays)
+    
+    # готовим маски для диапазонов данных
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')) - timedelta(days=7)
+    two_weeks_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')) - timedelta(days=14)
+
+    one_week_back_mask = df['report_datetime'] >= one_week_back_time
+    two_weeks_back_mask = (df['report_datetime'] >= two_weeks_back_time) & \
+                            (df['report_datetime'] < one_week_back_time)
+                            
+    # готовим данные со значениями 97,5 и 0,025 квантилей как минимальных и максимальных допустимых значений
+    iqr_mask = df['report_datetime'] <= one_week_back_time
+    iqr = df[iqr_mask].copy().groupby('weekday', observed=False)['report_revenue'].quantile([0.025, 0.975]).unstack()
+    iqr.columns = ['q025', 'q975']
+    
+    last_week_reports_data = df[one_week_back_mask].copy()
+    compare_week_reports_data = df[two_weeks_back_mask].copy()
+    
+    compare_week_reports_data_iqr = iqr.merge(compare_week_reports_data, on='weekday').sort_values(by=['report_datetime'], ascending=True)
+
+    weekday_order = compare_week_reports_data_iqr['weekday'].unique()
+    compare_week_reports_data_iqr['weekday'] = pd.Categorical(compare_week_reports_data_iqr['weekday'],
+                                                            categories=weekday_order,
+                                                            ordered=True)
+    
+    buf = io.BytesIO()
+    
+    # Plot
+    plt.figure(figsize=(12, 4))
+
+    # строим диапазон нормы
+    plt.fill_between(compare_week_reports_data_iqr['weekday'],
+                    compare_week_reports_data_iqr['q025'],
+                    compare_week_reports_data_iqr['q975'],
+                    color='blue',
+                    alpha=0.05,
+                    label='Диапазон нормы')
+
+    # строим график выручки за последнюю неделю
+    sns.lineplot(data=last_week_reports_data,
+                x='weekday',
+                y='report_revenue',
+                marker='o',
+                label='Текущая неделя')
+
+    # строим график выручки за неделю ранее предыдущей
+    sns.lineplot(data=compare_week_reports_data,
+                x='weekday',
+                y='report_revenue',
+                marker='o',
+                linestyle='--',
+                color='grey',
+                label='Предыдущая неделя',
+                alpha=0.7)
+
+    # помещаем значения выручки возле каждой точки на графике
+    for x, y in zip(last_week_reports_data['weekday'], last_week_reports_data['report_revenue']):
+        plt.text(x, y+600, f'{y:.0f}', ha='center', va='bottom', fontsize=10, color='black')
+
+    plt.title('Выручка по дням недели', fontsize=14, pad=10)
+    plt.xlabel('День недели', fontsize=12)
+    plt.ylabel('Выручка, руб.', fontsize=12)
+    plt.grid(True)
+    plt.legend(fontsize=8)
+    plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+    buf.seek(0)
+    
+    image_file = {"photo": ("plot.png", buf, "image/png")}
+    
+    return image_file
 
 
 def create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty):
@@ -97,10 +170,42 @@ def create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty):
     return text
     
 
-# последовательно выполняем каждую функцию
-sales_data_initial = df_loading()
+# выгружаем данные о транзакциях и приводим в порядок
+transactions_query = """
+SELECT t.transaction_datetime,
+    t.transaction_type,
+    t.transaction_product_name,
+    t.transaction_product_price,
+    t.product_qty,
+    p.product_unit,
+    t.balance_after
+FROM public.transactions AS t
+JOIN public.stocks AS s ON s.stock_id = t.stock_id
+JOIN public.products AS p ON p.product_id = s.product_id
+WHERE t.outlet_id = 5
+AND t.transaction_type = 'balance'
+"""
+sales_data_initial = df_loading(transactions_query, 'transaction_datetime')
 sales_data = df_transformation(sales_data_initial)
+
+# считаем топы продаж по товарам за предыдущую неделю
 last_week_sales_data = df_last_week(sales_data)
 top_5_cheese_by_revenue = calculate_top_5_cheese_by_revenue(last_week_sales_data)
 top_5_cheese_by_qty = calculate_top_5_cheese_by_qty(last_week_sales_data)
+
+
+# выгружаем данные об отчетах и приводим в порядок
+reports_query = """
+SELECT *
+FROM public.reports
+WHERE outlet_id = 5
+"""
+reports_data_initial = df_loading(reports_query, 'report_datetime')
+reports_data_transformed = reports_transformation(reports_data_initial)
+
+# формируем график выручки в динамике за неделю
+image_file = revenue_throughout_week(reports_data_transformed)
+
+
+# формируем текст сообщения
 message_text = create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty)
