@@ -18,6 +18,40 @@ def get_utc_chisinau(date_time: datetime):
     return date_time
 
 
+# создаем текст для сообщения
+def create_message_text(revenue_last_week,
+                        expected_revenue_last_week,
+                        avg_receipt_last_week,
+                        avg_receipt_all_time,
+                        clients_number,
+                        top_5_cheese_by_revenue,
+                        top_5_cheese_by_qty):
+    
+    text = '<b>НЕДЕЛЬНАЯ СВОДКА</b>\n\n'
+    
+    revenue_difference = ((revenue_last_week - expected_revenue_last_week) * 100 / expected_revenue_last_week).round(2)
+    
+    text += f'💸 Выручка - <b>{revenue_last_week} руб</b> (откл. от расчет. <b>{revenue_difference}%)</b>\n\n'
+    
+    avg_receipt_difference = ((avg_receipt_last_week - avg_receipt_all_time) * 100 / avg_receipt_all_time).round(2)
+    
+    text += f'🧾 Средний чек - <b>{avg_receipt_last_week} руб</b> (откл. от средненед. <b>{avg_receipt_difference}%)</b>\n\n'
+    
+    text += f'👤 Количество клиентов - <b>{clients_number}</b>\n\n'
+    
+    text += '🥇 <b>Топ 5 товаров по принесенной выручке</b>\n'
+    
+    for cheese in top_5_cheese_by_revenue.itertuples():
+        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.revenue, 2)} руб\n"
+        
+    text += '\n 🥇 <b>Топ 5 сыров по проданному количеству</b>\n'
+    
+    for cheese in top_5_cheese_by_qty.itertuples():
+        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.product_qty, 3)} кг\n"
+        
+    return text
+
+
 # Подключаемся к базе данных и делаем запрос
 def df_loading(query, date_column):
     load_dotenv()
@@ -42,10 +76,10 @@ def df_transformation(sales_data):
     return sales_data
 
 
-def df_last_week(sales_data):
+def df_last_week(df):
     # считаем данные за последние 7 дней
-    one_week_back_time = datetime.now(pytz.timezone('Europe/Chisinau')) - timedelta(days=7)
-    return sales_data[(sales_data['transaction_datetime'] > one_week_back_time)] \
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
+    return df[(df['transaction_datetime'] >= one_week_back_time)] \
                             .sort_values(by='transaction_datetime', ascending=True)
 
                       
@@ -87,8 +121,8 @@ def revenue_throughout_week(df):
     df['weekday'] = df['report_datetime'].dt.dayofweek.map(russian_weekdays)
     
     # готовим маски для диапазонов данных
-    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')) - timedelta(days=7)
-    two_weeks_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')) - timedelta(days=14)
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
+    two_weeks_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=13)
 
     one_week_back_mask = df['report_datetime'] >= one_week_back_time
     two_weeks_back_mask = (df['report_datetime'] >= two_weeks_back_time) & \
@@ -155,20 +189,44 @@ def revenue_throughout_week(df):
     
     return image_file
 
+# считаем выручку за последнюю неделю
+def calculate_revenue_last_week(df):
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
+    one_week_back_mask = df['report_datetime'] >= one_week_back_time
+    last_week_reports_data = df[one_week_back_mask].copy()
+    actual_revenue = last_week_reports_data.report_revenue.sum().round(2)
+    return actual_revenue
 
-def create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty):
-    text = 'Недельная сводка\n\nТоп 5 товаров по принесенной выручке:\n'
-    
-    for cheese in top_5_cheese_by_revenue.itertuples():
-        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.revenue, 2)} руб\n"
-        
-    text += '\nТоп 5 сыров по проданному количеству:\n'
-    
-    for cheese in top_5_cheese_by_qty.itertuples():
-        text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.product_qty, 3)} кг\n"
-        
-    return text
-    
+
+# расчет ожидаемой выручки за неделю
+def calculate_expected_revenue_last_week(df):
+    return df.revenue.sum().round(2)
+
+
+# расчет среднего чека за прошлую неделю
+def calculate_avg_receipt_last_week(df):
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
+    one_week_back_mask = df['report_datetime'] >= one_week_back_time
+    last_week_reports_data = df[one_week_back_mask].copy()
+    return (last_week_reports_data.report_revenue.sum() / last_week_reports_data.report_purchases.sum()).round()
+
+
+# расчет количества клиентов за неделю
+def calculate_clients_number(df):
+    one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
+    one_week_back_mask = df['report_datetime'] >= one_week_back_time
+    last_week_reports_data = df[one_week_back_mask].copy()
+    return last_week_reports_data.report_purchases.sum()
+
+
+# считаем средний средний чек за все недели
+def calculate_avg_receipt_all_weeks(df):
+    df['week_number'] = df.report_datetime.dt.strftime('%W')
+    df['year'] = df.report_datetime.dt.year
+    revenue_purchuses_by_weeks = df.groupby(['week_number', 'year'], as_index=False) \
+                                            .agg({'report_revenue': 'sum', 'report_purchases': 'sum'})
+    return (revenue_purchuses_by_weeks['report_revenue'] / revenue_purchuses_by_weeks['report_purchases']).mean().round()
+
 
 # выгружаем данные о транзакциях и приводим в порядок
 transactions_query = """
@@ -203,9 +261,31 @@ WHERE outlet_id = 5
 reports_data_initial = df_loading(reports_query, 'report_datetime')
 reports_data_transformed = reports_transformation(reports_data_initial)
 
+
 # формируем график выручки в динамике за неделю
 image_file = revenue_throughout_week(reports_data_transformed)
 
 
+# Выручка за неделю
+revenue_last_week = calculate_revenue_last_week(reports_data_transformed)
+expected_revenue_last_week = calculate_expected_revenue_last_week(last_week_sales_data)
+
+
+# считаем средний чек за прошлую неделю
+avg_receipt_last_week = calculate_avg_receipt_last_week(reports_data_transformed)
+avg_receipt_all_time = calculate_avg_receipt_all_weeks(reports_data_transformed)
+
+
+# количество клиентов
+clients_number = calculate_clients_number(reports_data_transformed)
+
+
 # формируем текст сообщения
-message_text = create_message_text(top_5_cheese_by_revenue, top_5_cheese_by_qty)
+message_text = create_message_text(revenue_last_week,
+                                   expected_revenue_last_week,
+                                   avg_receipt_last_week,
+                                   avg_receipt_all_time,
+                                   clients_number,
+                                   top_5_cheese_by_revenue,
+                                   top_5_cheese_by_qty
+                                   )

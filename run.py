@@ -10,7 +10,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(image_file, caption: str):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-    payload = {"chat_id": CHAT_ID, "caption": caption}
+    payload = {"chat_id": CHAT_ID, "caption": caption, "parse_mode": 'HTML'}
     response = requests.post(url, data=payload, files=image_file)
     return response.json()
 
