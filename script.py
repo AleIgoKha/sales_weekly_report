@@ -10,7 +10,6 @@ from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 
 
-
 # переводим +0 UTC в +3 UTC
 def get_utc_chisinau(date_time: datetime):
     tz = pytz.timezone("Europe/Chisinau")
@@ -39,12 +38,12 @@ def create_message_text(revenue_last_week,
     
     text += f'👤 Количество клиентов - <b>{clients_number}</b>\n\n'
     
-    text += '🥇 <b>Топ 5 товаров по принесенной выручке</b>\n'
+    text += '🥇 <b>Топ 5 товаров по выручке</b>\n'
     
     for cheese in top_5_cheese_by_revenue.itertuples():
         text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.revenue, 2)} руб\n"
         
-    text += '\n 🥇 <b>Топ 5 сыров по проданному количеству</b>\n'
+    text += '\n 🥇 <b>Топ 5 сыров по количеству</b>\n'
     
     for cheese in top_5_cheese_by_qty.itertuples():
         text += f"{cheese.Index + 1} {cheese.transaction_product_name} {round(cheese.product_qty, 3)} кг\n"
@@ -52,8 +51,8 @@ def create_message_text(revenue_last_week,
     return text
 
 
-# Подключаемся к базе данных и делаем запрос
-def df_loading(query, date_column):
+# подключаемся к базе и выгружаем нужные данные
+def load_data(query: str, date_column: str):
     load_dotenv()
     engine = create_engine(os.getenv("DB_LINK"))
     return pd.read_sql(sql=query,
@@ -61,31 +60,30 @@ def df_loading(query, date_column):
                        parse_dates=[date_column])
 
 
-def df_transformation(sales_data):
+# делаем необходимые трансформации данных и выводим срез за последние 7 дней
+def sales_data_transformation(df: pd.DataFrame):
     # корректируем время
-    sales_data['transaction_datetime'] = sales_data['transaction_datetime'].apply(get_utc_chisinau).dt.normalize()
+    df['transaction_datetime'] = df['transaction_datetime'].apply(get_utc_chisinau).dt.normalize()
 
     # считаем выручку для каждой позиции
-    sales_data['revenue'] = sales_data['transaction_product_price'] * sales_data['product_qty']
+    df['revenue'] = df['transaction_product_price'] * df['product_qty']
 
     # Приводим шевр в килограммы
-    sales_data.loc[sales_data['transaction_product_name'].str.startswith('Шевр'), 'product_unit'] = 'кг'
-    sales_data.loc[sales_data['transaction_product_name'].str.startswith('Шевр'), 'transaction_product_price'] = np.float64(200.0)
-    sales_data.loc[sales_data['transaction_product_name'].str.startswith('Шевр'), 'product_qty'] = np.float64(0.200) * sales_data['product_qty']
+    df.loc[df['transaction_product_name'].str.startswith('Шевр'), 'product_unit'] = 'кг'
+    df.loc[df['transaction_product_name'].str.startswith('Шевр'), 'transaction_product_price'] = np.float64(200.0)
+    df.loc[df['transaction_product_name'].str.startswith('Шевр'), 'product_qty'] = np.float64(0.200) * df['product_qty']
 
-    return sales_data
-
-
-def df_last_week(df):
     # считаем данные за последние 7 дней
     one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
-    return df[(df['transaction_datetime'] >= one_week_back_time)] \
-                            .sort_values(by='transaction_datetime', ascending=True)
+    one_week_back_mask = (df['transaction_datetime'] >= one_week_back_time)
+    df = df[one_week_back_mask].sort_values(by='transaction_datetime', ascending=True)
+    
+    return df
 
                       
 # выводим топ 5 товаров по принесенной выручке
-def calculate_top_5_cheese_by_revenue(last_week_sales_data):
-    return last_week_sales_data.groupby(['transaction_product_name'], as_index=False) \
+def calculate_top_5_cheese_by_revenue(df: pd.DataFrame):
+    return df.groupby(['transaction_product_name'], as_index=False) \
                                                     .revenue \
                                                     .sum() \
                                                     .sort_values(by=['revenue'], ascending=False) \
@@ -93,19 +91,19 @@ def calculate_top_5_cheese_by_revenue(last_week_sales_data):
                                                     .head()
 
 
-def calculate_top_5_cheese_by_qty(last_week_sales_data):
+# выводим топ 5 товаров по проданному количеству
+def calculate_top_5_cheese_by_qty(df: pd.DataFrame):
     # выводим топ 5 товаров измеряемых в килограммах по принесенной проданному количеству
-    return last_week_sales_data[last_week_sales_data['product_unit'] == 'кг'] \
-                                                    .groupby(['transaction_product_name'], as_index=False) \
-                                                    .product_qty \
-                                                    .sum() \
-                                                    .sort_values(by=['product_qty'], ascending=False) \
-                                                    .reset_index(drop=True) \
-                                                    .head()
+    return df[df['product_unit'] == 'кг'].groupby(['transaction_product_name'], as_index=False) \
+                                        .product_qty \
+                                        .sum() \
+                                        .sort_values(by=['product_qty'], ascending=False) \
+                                        .reset_index(drop=True) \
+                                        .head()
 
 
 # приводим время к дате и сортируем по нему для данных отчетов
-def reports_transformation(df):
+def reports_transformation(df: pd.DataFrame):
     df = df.sort_values(by=['report_datetime'], ascending=True)
     df['report_datetime'] = df['report_datetime'].apply(get_utc_chisinau) \
                                                                     .dt \
@@ -114,7 +112,7 @@ def reports_transformation(df):
 
 
 # возвращаем график с выручкой по дням недели
-def revenue_throughout_week(df):
+def revenue_throughout_week(df: pd.DataFrame):
     # даем дням недели русские короткие названия
     russian_weekdays = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'}
     
@@ -189,8 +187,9 @@ def revenue_throughout_week(df):
     
     return image_file
 
+
 # считаем выручку за последнюю неделю
-def calculate_revenue_last_week(df):
+def calculate_revenue_last_week(df: pd.DataFrame):
     one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
     one_week_back_mask = df['report_datetime'] >= one_week_back_time
     last_week_reports_data = df[one_week_back_mask].copy()
@@ -199,12 +198,12 @@ def calculate_revenue_last_week(df):
 
 
 # расчет ожидаемой выручки за неделю
-def calculate_expected_revenue_last_week(df):
+def calculate_expected_revenue_last_week(df: pd.DataFrame):
     return df.revenue.sum().round(2)
 
 
 # расчет среднего чека за прошлую неделю
-def calculate_avg_receipt_last_week(df):
+def calculate_avg_receipt_last_week(df: pd.DataFrame):
     one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
     one_week_back_mask = df['report_datetime'] >= one_week_back_time
     last_week_reports_data = df[one_week_back_mask].copy()
@@ -212,7 +211,7 @@ def calculate_avg_receipt_last_week(df):
 
 
 # расчет количества клиентов за неделю
-def calculate_clients_number(df):
+def calculate_clients_number(df: pd.DataFrame):
     one_week_back_time = pd.Timestamp.now(pytz.timezone('Europe/Chisinau')).normalize() - timedelta(days=6)
     one_week_back_mask = df['report_datetime'] >= one_week_back_time
     last_week_reports_data = df[one_week_back_mask].copy()
@@ -220,7 +219,7 @@ def calculate_clients_number(df):
 
 
 # считаем средний средний чек за все недели
-def calculate_avg_receipt_all_weeks(df):
+def calculate_avg_receipt_all_weeks(df: pd.DataFrame):
     df['week_number'] = df.report_datetime.dt.strftime('%W')
     df['year'] = df.report_datetime.dt.year
     revenue_purchuses_by_weeks = df.groupby(['week_number', 'year'], as_index=False) \
@@ -228,7 +227,8 @@ def calculate_avg_receipt_all_weeks(df):
     return (revenue_purchuses_by_weeks['report_revenue'] / revenue_purchuses_by_weeks['report_purchases']).mean().round()
 
 
-# выгружаем данные о транзакциях и приводим в порядок
+
+# выгружаем данные о транзакциях
 transactions_query = """
 SELECT t.transaction_datetime,
     t.transaction_type,
@@ -243,22 +243,26 @@ JOIN public.products AS p ON p.product_id = s.product_id
 WHERE t.outlet_id = 5
 AND t.transaction_type = 'balance'
 """
-sales_data_initial = df_loading(transactions_query, 'transaction_datetime')
-sales_data = df_transformation(sales_data_initial)
+sales_data_loaded = load_data(transactions_query, 'transaction_datetime')
+
+# трансформируем некоторые столбцы и делаем срез за последние 7 дней
+sales_data_transformed = sales_data_transformation(sales_data_loaded)
 
 # считаем топы продаж по товарам за предыдущую неделю
-last_week_sales_data = df_last_week(sales_data)
-top_5_cheese_by_revenue = calculate_top_5_cheese_by_revenue(last_week_sales_data)
-top_5_cheese_by_qty = calculate_top_5_cheese_by_qty(last_week_sales_data)
+top_5_cheese_by_revenue = calculate_top_5_cheese_by_revenue(sales_data_transformed)
+top_5_cheese_by_qty = calculate_top_5_cheese_by_qty(sales_data_transformed)
 
 
-# выгружаем данные об отчетах и приводим в порядок
+
+# выгружаем данные об отчетах
 reports_query = """
 SELECT *
 FROM public.reports
 WHERE outlet_id = 5
 """
-reports_data_initial = df_loading(reports_query, 'report_datetime')
+reports_data_initial = load_data(reports_query, 'report_datetime')
+
+# нормализуем колонку времени
 reports_data_transformed = reports_transformation(reports_data_initial)
 
 
@@ -268,7 +272,7 @@ image_file = revenue_throughout_week(reports_data_transformed)
 
 # Выручка за неделю
 revenue_last_week = calculate_revenue_last_week(reports_data_transformed)
-expected_revenue_last_week = calculate_expected_revenue_last_week(last_week_sales_data)
+expected_revenue_last_week = calculate_expected_revenue_last_week(sales_data_transformed)
 
 
 # считаем средний чек за прошлую неделю
