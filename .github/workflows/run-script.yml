@@ -3,7 +3,7 @@ name: Run Telegram Report Script
 on:
   workflow_dispatch:   # run manually
   schedule:
-    - cron: "0 9 * * *"   # runs daily at 09:00 UTC
+    - cron: "0 6 * * 1"   # runs daily at 09:00 in +3 UTC every monday
 
 jobs:
   run-script:
